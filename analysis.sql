@@ -13,6 +13,19 @@ ORDER BY total_exec_time DESC
 
 SHOW config_file;
 
+--- Lock Analysis
+SELECT
+    a.pid,
+    a.usename,
+    l.locktype,
+    l.mode,
+    l.granted,
+    a.query
+FROM pg_locks l
+         JOIN pg_stat_activity a ON l.pid = a.pid
+WHERE a.pid <> pg_backend_pid()
+ORDER BY a.pid;
+
 -- See Active Locks and Who is Blocking Whom --
 SELECT
     blocked.pid AS blocked_pid,
