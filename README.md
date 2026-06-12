@@ -24,3 +24,22 @@
 | Customer Active Join | 26.7 ms | ~0.5 ms | Composite Order Index |
 | Wide Event Grouping | 72.8 ms | 35.2 ms | Covering Index + Vacuum |
 | Product Category Revenue | 59.1 ms | 39.2 ms | Pre-Aggregation Subquery |
+
+## 5. Bonus Task: Concurrency & Lock Analysis
+
+### Identified Lock-Contention Scenarios
+Using monitoring lookups, two major lock-contention choke points were successfully simulated and diagnosed:
+1. **Row-Level Cumulative Blocking (`transactionid` / `tuple` locks):** Multiple independent worker sessions (such as PIDs 21494, 21537, 21542) stacked up waiting to execute concurrent `UPDATE` queries on specific customer entries (`customer_id = 1` and `customer_id = 3`).
+2. **Coarse Table-Level Stalls (`relation` locks):** PID 21503 became completely frozen attempting to run a routine, single-row update on `orders` because PID 21495 invoked an explicit `LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE;` statement.
+
+### Root Cause Analysis
+* **Row Contention:** PostgreSQL's MVCC takes strict exclusive write-locks on rows during an `UPDATE`. Because the application workers target the same record sets simultaneously without safe extraction barriers, subsequent sessions stall waiting for preceding transactions to commit.
+* **Table Contention:** The `SHARE ROW EXCLUSIVE` table lock is an anti-pattern for concurrent high-volume systems; it prevents any parallel changes to the relation, turning a highly parallel table structure into a single-threaded queue.
+
+### Technical Solutions Implemented
+1. **Transactional Row Skipping:** Implemented `FOR UPDATE SKIP LOCKED` logic for worker processes. This instructs incoming worker sessions to immediately skip rows currently being processed by other threads instead of blocking.
+2. **Granular Locking:** Eliminated explicit `LOCK TABLE` commands. Replaced them with highly isolated row-level B-Tree index-driven searches using `SELECT ... FOR UPDATE` targeting precise primary key constraints.
+
+### Validation Evidence (Before vs. After)
+* **Ungranted Locks Before Optimization:** 8 active sessions heavily blocked. Row update queries stalled behind table-level and row-level locks, causing transaction-wait build-ups.
+* **Ungranted Locks After Optimization:** 0 blocked sessions. By shifting to row-level locks and utilizing `SKIP LOCKED` filters, concurrent application threads execute seamlessly in parallel without experiencing a single freeze.
